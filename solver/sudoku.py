@@ -1,6 +1,9 @@
 """ Module Representing a Sudoku Puzzle """
 from typing import Optional, List
 
+from pulp import LpProblem, LpMinimize, LpVariable, LpInteger, PULP_CBC_CMD, value as v, lpSum, LpBinary, LpConstraint, \
+    const, LpStatus
+
 from solver.box import Box, DEFAULT_BOXES
 from solver.cell import Cell
 
@@ -8,7 +11,10 @@ from solver.cell import Cell
 class Sudoku:
     """ A Model for a Sudoku Puzzle """
 
-    def __init__(self, rows: int = 9, columns: int = 9, boxes: List[Box] = DEFAULT_BOXES, givens_string: Optional[str] = None):
+    def __init__(self, rows: int = 9, columns: int = 9, boxes: List[Box] = DEFAULT_BOXES,
+                 givens_string: Optional[str] = None):
+        # For now, only square-shaped sudokus are allowed
+        assert rows == columns
         self.rows = rows
         self.columns = columns
 
@@ -53,3 +59,81 @@ class Sudoku:
         for row in range(1, self.rows + 1):
             for column in range(1, self.columns + 1):
                 assert Cell(row, column) in box_cells
+
+    def solve(self):
+        """
+        Solve the sudoku using linear programming
+        :return:
+        """
+        min_cell_value = 1
+        max_cell_value = max(self.rows, self.columns)
+        valid_cell_numbers = list(range(min_cell_value, max_cell_value + 1))
+
+        sudoku = LpProblem("Sudoku Problem", LpMinimize)
+        cells = LpVariable.dicts("Cells", (valid_cell_numbers, valid_cell_numbers), min_cell_value, max_cell_value, const.LpInteger)
+
+        # The arbitrary objective function is added
+        sudoku += 0, "Arbitrary Objective Function"
+
+        # Add row constraint (no duplicates within a row)
+        for row in valid_cell_numbers:
+            sudoku += lpSum([cells[row][c] for c in valid_cell_numbers]) == sum(valid_cell_numbers)
+            for column in valid_cell_numbers:
+                columns_to_right = list(filter(lambda c: c > column, valid_cell_numbers))
+                for c in columns_to_right:
+                    # Set all different constraint
+                    # http://yetanothermathprogrammingconsultant.blogspot.com/2016/05/all-different-and-mixed-integer.html
+                    bin_var = LpVariable(f"r{row}c{column}_row_r{row}c{c}", 0, 1, const.LpInteger)
+                    sudoku += cells[row][column] <= cells[row][c] - 1 + max_cell_value * bin_var
+                    sudoku += cells[row][column] >= cells[row][c] + 1 - max_cell_value * (1 - bin_var)
+
+        # Add column constraint (no duplicates within a column)
+        for column in valid_cell_numbers:
+            sudoku += lpSum([cells[r][column] for r in valid_cell_numbers]) == sum(valid_cell_numbers)
+            for row in valid_cell_numbers:
+                rows_to_right = list(filter(lambda r: r > row, valid_cell_numbers))
+                for r in rows_to_right:
+                    # Set all different constraint
+                    # http://yetanothermathprogrammingconsultant.blogspot.com/2016/05/all-different-and-mixed-integer.html
+                    bin_var = LpVariable(f"r{row}c{column}_column_r{r}c{column}", 0, 1, const.LpInteger)
+                    sudoku += cells[row][column] <= cells[r][column] - 1 + max_cell_value * bin_var
+                    sudoku += cells[row][column] >= cells[r][column] + 1 - max_cell_value * (1 - bin_var)
+
+        # Add box constraints (no duplicates within a box)
+        for box in self.boxes:
+            box.add_box_constraint(sudoku, cells, sum(valid_cell_numbers))
+
+        # Add in all the givens
+        for cell, value in self.digits.items():
+            sudoku += cells[cell.row][cell.column] == value
+
+        # Solve the sudoku
+        sudoku.solve(PULP_CBC_CMD(msg=False))
+        assert sudoku.status == const.LpStatusOptimal
+
+        # Temporary Solution: write out 9x9 sudokus to a test file
+        # TODO: Implement better return type for this method for easier use (dictionary or 2d list most likely)
+        if self.rows == 9:
+            # A file called sudokuout.txt is created/overwritten for writing to
+            sudokuout = open('sudokuout.txt', 'w')
+
+            # The solution is written to the sudokuout.txt file
+            for r in valid_cell_numbers:
+                if r % 3 == 1:
+                    sudokuout.write("+-------+-------+-------+\n")
+                for c in valid_cell_numbers:
+                    if c % 3 == 1:
+                        sudokuout.write("| ")
+
+                    val = int(v(cells[r][c]))
+                    if val > 9 or val < 1:
+                        print(f"r{r}c{c} = {val}")
+                    sudokuout.write(str(int(v(cells[r][c]))) + " ")
+
+                    if c == 9:
+                        sudokuout.write("|\n")
+            sudokuout.write("+-------+-------+-------+")
+            sudokuout.close()
+
+            # The location of the solution is give to the user
+            print("Solution Written to sudokuout.txt")

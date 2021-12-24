@@ -1,6 +1,8 @@
 """ Module Representing a sudoku box """
 from typing import List
 
+from pulp import LpProblem, LpVariable, lpSum, LpInteger, LpConstraint, const
+
 from solver.cell import Cell
 
 
@@ -39,6 +41,15 @@ class Box:
         # If all cells have been visited, the region is connected
         assert len(visited_cells) == len(self.cells)
 
+    def add_box_constraint(self, sudoku: LpProblem, cells: dict[int, dict[int, LpVariable]], box_sum: int):
+        sudoku += lpSum([cells[c.row][c.column] for c in self.cells]) == box_sum
+        for index, cell in enumerate(self.cells):
+            for c in self.cells[index + 1:]:
+                # Set all different constraint
+                # http://yetanothermathprogrammingconsultant.blogspot.com/2016/05/all-different-and-mixed-integer.html
+                bin_var = LpVariable(f"r{cell.row}c{cell.column}_box_r{c.row}c{c.column}", 0, 1, const.LpInteger)
+                sudoku += cells[cell.row][cell.column] <= cells[c.row][c.column] - 1 + len(self.cells) * bin_var
+                sudoku += cells[cell.row][cell.column] >= cells[c.row][c.column] + 1 - len(self.cells) * (1 - bin_var)
 
 
 DEFAULT_BOXES = [
